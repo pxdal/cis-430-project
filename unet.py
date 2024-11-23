@@ -8,9 +8,7 @@ class Conv(torch.nn.Module):
         
         self.conv = torch.nn.Sequential(
             torch.nn.Conv1d(in_channels, out_channels, kernel_size=3, padding="same"),
-            torch.nn.ReLU(),
-            
-            torch.nn.Conv1d(
+            torch.nn.ReLU()
         )
     
     def forward(self, x):
