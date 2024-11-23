@@ -5,7 +5,7 @@ import numpy as np
 from unet import UNet1d
 
 def main(argc, argv):
-    unet_test = UNet1d()
+    unet_test = UNet1d(1, 1)
     
     test_data = torch.tensor(np.random.rand(64).reshape(2, 1, 32), dtype=torch.float32)
     
