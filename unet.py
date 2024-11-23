@@ -56,9 +56,11 @@ class UNet1d(torch.nn.Module):
         # input layer converts input to feature layers
         self.inp = Conv(input_channels, 16)
         
+        # downsamples data
         self.down1 = DownConv1d(16, 32)
         self.down2 = DownConv1d(32, 64)
-        
+
+        # upsamples data + apply skip connections
         self.up1 = UpConv1d(64, 32)
         self.up2 = UpConv1d(32, 16)
         
