@@ -8,7 +8,12 @@ class Conv(torch.nn.Module):
         
         self.conv = torch.nn.Sequential(
             torch.nn.Conv1d(in_channels, out_channels, kernel_size=3, padding="same"),
-            torch.nn.ReLU()
+            torch.nn.BatchNorm1d(out_channels),
+            # torch.nn.ReLU(),
+            
+            torch.nn.Conv1d(out_channels, out_channels, kernel_size=3, padding="same"),
+            torch.nn.BatchNorm1d(out_channels),
+            # torch.nn.ReLU()
         )
     
     def forward(self, x):
@@ -69,6 +74,7 @@ class UNet1d(torch.nn.Module):
     
     def forward(self, x):
         x = self.inp(x)
+        
         d1 = self.down1(x)
         d2 = self.down2(d1)
         
