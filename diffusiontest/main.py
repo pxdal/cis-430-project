@@ -66,7 +66,7 @@ class UpConv2d(torch.nn.Module):
         # we have the transpose operation output half the input because the skip connections add the other half of the channels
         # then the convolution operation outputs the proper number of channels
         self.up_conv = torch.nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-        self.conv = Conv(in_channels, out_channels)
+        self.conv = Conv(in_channels-1, out_channels) # -1 for timestep layer
         
         # self.up_conv = torch.nn.ConvTranspose2d(in_channels, in_channels, kernel_size=2, stride=2)
         # self.conv = Conv(in_channels, out_channels)
@@ -95,36 +95,53 @@ class SinusoidalPositionEmbeddings(torch.nn.Module):
 
 # unet implementation
 class UNet(torch.nn.Module):
-    def __init__(self, input_channels, output_channels, activation="sigmoid"):
+    def __init__(self, input_channels, output_channels, num_timesteps, activation="sigmoid"):
         super().__init__()
         
+        self.timesteps = num_timesteps
+        
         # input layer converts input to feature layers
-        self.inp = Conv(input_channels, 16)
+        self.inp = Conv(input_channels, 32)
         
         # downsamples data
-        self.down1 = DownConv2d(16, 32)
-        self.down2 = DownConv2d(32, 64)
+        self.down1 = DownConv2d(33, 64)
+        self.down2 = DownConv2d(65, 128)
 
         # upsamples data + apply skip connections
-        self.up1 = UpConv2d(64, 32)
-        self.up2 = UpConv2d(32, 16)
+        self.up1 = UpConv2d(129, 64)
+        self.up2 = UpConv2d(65, 32)
         
         # output layer converts feature layers to output channels
         self.out = torch.nn.Sequential(
-            torch.nn.Conv2d(16, output_channels, kernel_size=3, padding="same"),
+            torch.nn.Conv2d(33, output_channels, kernel_size=3, padding="same"),
             # torch.nn.Tanh() if activation == "tanh" else torch.nn.Sigmoid()
         )
     
-    def forward(self, x):
-        x = self.inp(x)
+    # embed timestep into input for single input/timestep pair
+    def add_timestep_to_input_single(self, img, timestep):
+        timestep_layer = torch.full(img.shape[1:], (timestep / self.timesteps)*2 - 1 ).unsqueeze(0).to(device)
         
-        d1 = self.down1(x)
-        d2 = self.down2(d1)
+        return torch.cat((img, timestep_layer))
+    
+    # embed timestep into input for batch of input/timestep pairs
+    def add_timestep_to_input(self, imgs, timesteps):
+        out = []
         
-        u1 = self.up1(d2, d1)
-        u2 = self.up2(u1, x)
+        for img, timestep in zip(imgs, timesteps):
+            out.append(self.add_timestep_to_input_single(img, timestep))
         
-        return self.out(u2)
+        return torch.stack(out)
+    
+    def forward(self, x, timesteps):
+        x = self.inp(self.add_timestep_to_input(x, timesteps))
+        
+        d1 = self.down1(self.add_timestep_to_input(x, timesteps))
+        d2 = self.down2(self.add_timestep_to_input(d1, timesteps))
+
+        u1 = self.up1(self.add_timestep_to_input(d2, timesteps), d1)
+        u2 = self.up2(self.add_timestep_to_input(u1, timesteps), x)
+        
+        return self.out(self.add_timestep_to_input(u2, timesteps))
         
 # class Denoiser(torch.nn.Module):
     # def __init__(self, num_channels):
@@ -156,10 +173,10 @@ def get_alpha_values_and_schedule(noise_schedule):
     return alpha_values, torch.cumprod(alpha_values, axis=0)
 
 class DiffusionModel():
-    num_epochs = 5000
-    batch_size = 64
+    num_epochs = 1000
+    batch_size = 512
     
-    learning_rate = 3e-4
+    learning_rate = 1e-4
     
     def __init__(self, timesteps, shape):
         self.timesteps = timesteps
@@ -167,7 +184,7 @@ class DiffusionModel():
         self.noise_schedule = linear_noise_schedule(self.timesteps)
         self.alpha_values, self.alpha_schedule = get_alpha_values_and_schedule(self.noise_schedule)
         
-        self.noise_predictor = UNet(2, 1)
+        self.noise_predictor = UNet(2, 1, self.timesteps)
         
         self.noise_predictor.to(device)
         
@@ -176,21 +193,6 @@ class DiffusionModel():
     
     def load_from_checkpoint(self, d):
         self.noise_predictor.load_state_dict(torch.load(d, weights_only=False))
-        
-    # embed timestep into input for single input/timestep pair
-    def add_timestep_to_input_single(self, img, timestep):
-        timestep_layer = torch.full(img.shape, (timestep / self.timesteps)*2 - 1 ).to(device)
-        
-        return torch.cat((img, timestep_layer))
-    
-    # embed timestep into input for batch of input/timestep pairs
-    def add_timestep_to_input(self, imgs, timesteps):
-        out = []
-        
-        for img, timestep in zip(imgs, timesteps):
-            out.append(self.add_timestep_to_input_single(img, timestep))
-        
-        return torch.stack(out)
     
     # get diffused input x at timesteps t
     def forward_single(self, x, t):
@@ -219,22 +221,29 @@ class DiffusionModel():
         
         return torch.stack(forward_features), torch.stack(forward_noises)
     
-    def backward_single(self, shape):
-        # start from random noise
+    def backward_single(self, shape, return_all=False):
         self.noise_predictor.eval()
         
-        with torch.no_grad():            
+        if return_all:
+            all_images = []
+        
+        with torch.no_grad():
+            # start from random noise            
             current_image = torch.randn(shape).unsqueeze(1).to(device)
+            # current_image = torch.full(shape, 1).unsqueeze(1).to(device)
             
             for t in range(self.timesteps, 0, -1):
+                if return_all:
+                    all_images.append(current_image[0])
+                
                 alpha_val = self.alpha_values[t-1]
                 alpha_hat = self.alpha_schedule[t-1]
                 
                 random_variance = torch.randn(current_image.shape).to(device)
                 
-                inp = self.add_timestep_to_input(current_image, torch.tensor([t]))
+                # inp = self.add_timestep_to_input(current_image, torch.tensor([t]))
                 
-                predicted_noise = self.noise_predictor(inp)
+                predicted_noise = self.noise_predictor(current_image, torch.tensor([t]))
                 
                 noise_coefficient = (1 - alpha_val) / math.sqrt(1 - alpha_hat)
                 
@@ -244,7 +253,12 @@ class DiffusionModel():
                 
                 current_image = next_image
         
-        return current_image[0]
+        if return_all:
+            all_images.append(current_image[0])
+            
+            return all_images
+        else:
+            return current_image[0]
         
     def get_random_timesteps(self, num):
         return torch.floor(torch.rand(num) * self.timesteps).int() + 1
@@ -281,10 +295,10 @@ class DiffusionModel():
             
             diffused_images, actual_noise = self.forward(train_features, timesteps)
             
-            diffused_images_embedded = self.add_timestep_to_input(diffused_images, timesteps)
+            # diffused_images_embedded = self.add_timestep_to_input(diffused_images, timesteps)
             
             # denoise images
-            predicted_noise = self.noise_predictor(diffused_images_embedded)
+            predicted_noise = self.noise_predictor(diffused_images, timesteps)
             
             # get loss
             total_loss = self.loss_func(predicted_noise, actual_noise)
@@ -295,7 +309,7 @@ class DiffusionModel():
             self.optimizer.step()
             
             if i % 50 == 0:
-                print("Epoch:", i, " - Loss:", total_loss)
+                print("Epoch:", i, " - Loss:", float(total_loss))
         
         
         torch.save(self.noise_predictor.state_dict(), save_dir)
@@ -362,9 +376,12 @@ class DiffusionModel():
         
         # if i % 10 == 0:
             # print("Epoch:", i, " - Loss:", loss)
-    
-def show_image_tensor(title, tensor, size, adjust=lambda x: x):
+
+def get_image_from_tensor(tensor, size, adjust=lambda x: x):
     tensor = adjust(tensor)
+    
+    # clamp values
+    tensor = torch.clamp(tensor, 0, 1)
     
     img = tensor.permute(1, 2, 0).cpu().detach().numpy()
     
@@ -372,7 +389,17 @@ def show_image_tensor(title, tensor, size, adjust=lambda x: x):
     
     new_height, new_width = old_height*size, old_width*size
     
+    img *= 255
+    img = img.astype(np.uint8)
+    
+    # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    
     img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+    
+    return img
+    
+def show_image_tensor(title, tensor, size, adjust=lambda x: x):
+    img = get_image_from_tensor(tensor, size, adjust)
     
     cv2.imshow(title, img)
 
@@ -391,29 +418,80 @@ def main(argc, argv):
         img2tensor
     ]))
     
-    # filter out only one class
-    filter_label = 7
+    # # filter out only one class
+    # filter_label = 7
     
-    filtered_dataset = []
+    # filtered_dataset = []
     
-    for img, label in test_dataset:
-        if label == filter_label:
-            filtered_dataset.append((img, label))
+    # for img, label in train_dataset:
+        # if label == filter_label:
+            # filtered_dataset.append((img, label))
+    
+    filtered_dataset = train_dataset
+    
+    print("dataset size: " + str(len(filtered_dataset)))
     
     timesteps = 1000
     
     diffusion = DiffusionModel(shape=train_dataset[0][0].shape, timesteps=timesteps)
     
     # diffusion.train(filtered_dataset, "test1.pth")
-    diffusion.load_from_checkpoint("test_5000epochs_1000timesteps.pth")
+    diffusion.load_from_checkpoint("test2_megatraining.pth")
+    # diffusion.load_from_checkpoint("test2_5000epochs.pth")
+    
+    ### VIDEO EXAMPLE ##
+    
+    print("getting images...")
+    all_samples = diffusion.backward_single(train_dataset[0][0].shape, return_all=True)
+    print("done")
+    
+    fps = 100
+    frame_size = 5
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    out = cv2.VideoWriter("reverse_process.mp4", fourcc, float(fps), (28 * frame_size, 28 * frame_size), False)
+    
+    frame = 0
+    wait_time = 1
+    
+    while True:
+        if cv2.waitKey(wait_time) == ord('q'):
+            break
+        
+        show_image_tensor("reverse process", all_samples[frame], 10, tensor2img)
+        
+        frame += 1
+        
+        if frame == len(all_samples):
+            cv2.waitKey(0)
+            break
+    
+    print("writing video...")
+    
+    for frame in all_samples:
+        img = get_image_from_tensor(frame, frame_size, tensor2img)
+        
+        out.write(img)
+    
+    # write some extra of last frame
+    last_frame_extra = 1
+    last_frame_extra *= fps
+    
+    for i in range(last_frame_extra):
+        img = get_image_from_tensor(all_samples[-1], frame_size, tensor2img)
+        
+        out.write(img)
+        
+    out.release()
+    
+    ### SINGLE IMAGE DIFFUSION ### 
     
     # test_image = filtered_dataset[0][0].to(device)
     
-    # test_timestep = 200
+    # test_timestep = 100
     
     # diffused, noise = diffusion.forward_single(test_image, test_timestep)
     
-    # predicted_noise = diffusion.noise_predictor(diffusion.add_timestep_to_input_single(diffused, test_timestep).unsqueeze(0))[0]
+    # predicted_noise = diffusion.noise_predictor(diffused.unsqueeze(0), torch.tensor([test_timestep]))[0]
     
     # mse = torch.abs(predicted_noise - noise)
     
@@ -436,14 +514,18 @@ def main(argc, argv):
     
     # cv2.waitKey(0)
     
-    for i in range(10):
-        test = diffusion.backward_single(train_dataset[0][0].shape)
+    ### MULTIPLE SINGLES ###
+    
+    # for i in range(10):
+        # test = diffusion.backward_single(train_dataset[0][0].shape)
         
-        # print(test)
+        # # print(test)
         
-        show_image_tensor("test " + str(i), test, 10, tensor2img)
+        # show_image_tensor("test " + str(i), test, 10, tensor2img)
         
-    cv2.waitKey(0)
+    # cv2.waitKey(0)
+    
+    ### I DON'T REMEMBER WHAT THIS WAS ###
     
     # names = [str(i) for i in range(0, 110, 10)]
     # name = 0
@@ -498,6 +580,6 @@ def main(argc, argv):
 
         # # if cv2.waitKey(1) == ord('q'):
             # # break
-
+    
 if __name__ == "__main__":
     main(len(sys.argv), sys.argv)
