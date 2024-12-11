@@ -65,10 +65,10 @@ class UpConv2d(torch.nn.Module):
         
         # we have the transpose operation output half the input because the skip connections add the other half of the channels
         # then the convolution operation outputs the proper number of channels
+        
         self.up_conv = torch.nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
         self.conv = Conv(in_channels-1, out_channels) # -1 for timestep layer
-        
-        # self.up_conv = torch.nn.ConvTranspose2d(in_channels, in_channels, kernel_size=2, stride=2)
+        # self.up_conv = torch.nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
         # self.conv = Conv(in_channels, out_channels)
     
     def forward(self, x, skip):
@@ -116,6 +116,23 @@ class UNet(torch.nn.Module):
             torch.nn.Conv2d(33, output_channels, kernel_size=3, padding="same"),
             # torch.nn.Tanh() if activation == "tanh" else torch.nn.Sigmoid()
         )
+        
+        # # input layer converts input to feature layers
+        # self.inp = Conv(input_channels, 32)
+        
+        # # downsamples data
+        # self.down1 = DownConv2d(32, 64)
+        # self.down2 = DownConv2d(64, 128)
+
+        # # upsamples data + apply skip connections
+        # self.up1 = UpConv2d(128, 64)
+        # self.up2 = UpConv2d(64, 32)
+        
+        # # output layer converts feature layers to output channels
+        # self.out = torch.nn.Sequential(
+            # torch.nn.Conv2d(32, output_channels, kernel_size=3, padding="same"),
+            # # torch.nn.Tanh() if activation == "tanh" else torch.nn.Sigmoid()
+        # )
     
     # embed timestep into input for single input/timestep pair
     def add_timestep_to_input_single(self, img, timestep):
@@ -143,6 +160,18 @@ class UNet(torch.nn.Module):
         
         return self.out(self.add_timestep_to_input(u2, timesteps))
         
+        # x = self.inp(x)
+        
+        # d1 = self.down1(x)
+        # d2 = self.down2(d1)
+
+        # u1 = self.up1(d2, d1)
+        # u2 = self.up2(u1, x)
+        
+        # return self.out(u2)
+
+
+
 # class Denoiser(torch.nn.Module):
     # def __init__(self, num_channels):
         # super().__init__()
@@ -174,9 +203,9 @@ def get_alpha_values_and_schedule(noise_schedule):
 
 class DiffusionModel():
     num_epochs = 1000
-    batch_size = 512
+    batch_size = 64
     
-    learning_rate = 1e-4
+    learning_rate = 3e-4
     
     def __init__(self, timesteps, shape):
         self.timesteps = timesteps
@@ -185,6 +214,8 @@ class DiffusionModel():
         self.alpha_values, self.alpha_schedule = get_alpha_values_and_schedule(self.noise_schedule)
         
         self.noise_predictor = UNet(2, 1, self.timesteps)
+        # self.noise_predictor = UNet(1, 1, self.timesteps)
+        # self.noise_predictor = SimpleLinear(shape[1], shape[2], 1, 1)
         
         self.noise_predictor.to(device)
         
@@ -435,53 +466,54 @@ def main(argc, argv):
     
     diffusion = DiffusionModel(shape=train_dataset[0][0].shape, timesteps=timesteps)
     
-    # diffusion.train(filtered_dataset, "test1.pth")
-    diffusion.load_from_checkpoint("test2_megatraining.pth")
+    diffusion.train(filtered_dataset, "test1.pth")
+    # diffusion.load_from_checkpoint("test1.pth")
+    # diffusion.load_from_checkpoint("test2_megatraining.pth")
     # diffusion.load_from_checkpoint("test2_5000epochs.pth")
     
     ### VIDEO EXAMPLE ##
     
-    print("getting images...")
-    all_samples = diffusion.backward_single(train_dataset[0][0].shape, return_all=True)
-    print("done")
+    # print("getting images...")
+    # all_samples = diffusion.backward_single(train_dataset[0][0].shape, return_all=True)
+    # print("done")
     
-    fps = 100
-    frame_size = 5
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    out = cv2.VideoWriter("reverse_process.mp4", fourcc, float(fps), (28 * frame_size, 28 * frame_size), False)
+    # fps = 100
+    # frame_size = 5
+    # fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    # out = cv2.VideoWriter("reverse_process.mp4", fourcc, float(fps), (28 * frame_size, 28 * frame_size), False)
     
-    frame = 0
-    wait_time = 1
+    # frame = 0
+    # wait_time = 1
     
-    while True:
-        if cv2.waitKey(wait_time) == ord('q'):
-            break
+    # while True:
+        # if cv2.waitKey(wait_time) == ord('q'):
+            # break
         
-        show_image_tensor("reverse process", all_samples[frame], 10, tensor2img)
+        # show_image_tensor("reverse process", all_samples[frame], 10, tensor2img)
         
-        frame += 1
+        # frame += 1
         
-        if frame == len(all_samples):
-            cv2.waitKey(0)
-            break
+        # if frame == len(all_samples):
+            # cv2.waitKey(0)
+            # break
     
-    print("writing video...")
+    # print("writing video...")
     
-    for frame in all_samples:
-        img = get_image_from_tensor(frame, frame_size, tensor2img)
+    # for frame in all_samples:
+        # img = get_image_from_tensor(frame, frame_size, tensor2img)
         
-        out.write(img)
+        # out.write(img)
     
-    # write some extra of last frame
-    last_frame_extra = 1
-    last_frame_extra *= fps
+    # # write some extra of last frame
+    # last_frame_extra = 1
+    # last_frame_extra *= fps
     
-    for i in range(last_frame_extra):
-        img = get_image_from_tensor(all_samples[-1], frame_size, tensor2img)
+    # for i in range(last_frame_extra):
+        # img = get_image_from_tensor(all_samples[-1], frame_size, tensor2img)
         
-        out.write(img)
+        # out.write(img)
         
-    out.release()
+    # out.release()
     
     ### SINGLE IMAGE DIFFUSION ### 
     
@@ -516,14 +548,14 @@ def main(argc, argv):
     
     ### MULTIPLE SINGLES ###
     
-    # for i in range(10):
-        # test = diffusion.backward_single(train_dataset[0][0].shape)
+    for i in range(10):
+        test = diffusion.backward_single(train_dataset[0][0].shape)
         
-        # # print(test)
+        # print(test)
         
-        # show_image_tensor("test " + str(i), test, 10, tensor2img)
+        show_image_tensor("test " + str(i), test, 10, tensor2img)
         
-    # cv2.waitKey(0)
+    cv2.waitKey(0)
     
     ### I DON'T REMEMBER WHAT THIS WAS ###
     
