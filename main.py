@@ -6,7 +6,9 @@ from noise_predictors import BasicNoisePredictor
 from diffusion import DDPM
 
 # train provided diffusion model on provided dataset
-def train(model, dataset):
+def train(model, dataset, num_epochs, learning_rate):
+    
+    
     return
 
 def main(argc, argv):
@@ -25,6 +27,7 @@ def main(argc, argv):
     # create diffusion model
     ddpm = DDPM(timesteps, in_steps, out_steps, num_agents, device=device, noise_predictor="basic")
     
+    train(ddpm, data, num)
     
     return
 

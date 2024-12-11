@@ -42,32 +42,39 @@ class DDPM():
         # get variance at each timestep
         # (which is exactly what the noise schedule is, but for clarity it gets its own variable)
         self.sigma2 = self.beta
+        
+        self.loss_func = torch.nn.MSELoss()
     
     # get parameters for training
     def parameters(self):
         return self.noise_predictor.parameters()
     
-    # get the mean and variance of the q(x_t | x_0) distribution for the timestep given x0
+    # get the mean and variance of the q(x_t | x_0) distribution for the batch of timesteps given the batch of x0
+    # there should be as many timesteps as samples in the batch
+    # mean shape: same as x0
+    # var shape: same as t
     def get_q_distribution(self, x0, t):
         # mean is sqrt(alpha_bar) * x0
-        mean = self.alpha_bar[t] ** 0.5 * x0
+        mean = self.alpha_bar.gather(0, t).reshape(-1, 1) ** 0.5 * x0
         
-        var = 1 - self.alpha_bar[t]
+        var = 1 - self.alpha_bar.gather(0, t)
         
         return mean, var
     
-    # sample from the q(x_t | x_0) distribution for the timestep given x0
+    # sample from the q(x_t | x_0) distribution for the batch of timesteps each given the batch of x_0
+    # this is the "forward process"
     def sample_q_distribution(self, x0, t):
         mean, var = self.get_q_distribution(x0, t)
         
-        eps = torch.randn_like(x0)
+        eps = torch.randn_like(x0).to(self.device)
         
         # reparameterization trick
         std = var ** 0.5
         
         return mean + std*eps
     
-    # sample from the p(x_t-1 | x_t, c) distribution given x_t and conditioning
+    # sample from the p(x_t-1 | x_t, c) distribution given batch of x_t, batch of timesteps, and batch of conditioning
+    # there should be the same number of timesteps and conditionings as there are samples in the batch of x_t
     def sample_p_distribution(self, xt, t, conditioning):
         # get the noise prediction
         noise_prediction = self.noise_predictor(xt, t, conditioning)
@@ -80,4 +87,15 @@ class DDPM():
         noise_coefficient = beta / ((1 - alpha_bar) ** 0.5)
         diff_coefficient = 1 / (alpha ** 0.5)
         
-        mean = ( (noise_coefficient * noise_prediction)
+        mean = diff_coefficient * ( xt - (noise_coefficient * noise_prediction) )
+        
+        # get variance
+        var = self.sigma2[t]
+        
+        # get added noise from variance
+        noise = torch.randn_like(xt).to(self.device)
+        
+        # reparameterization trick
+        std = var ** 0.5
+        
+        return mean + std*noise
