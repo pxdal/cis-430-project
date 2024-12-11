@@ -20,6 +20,9 @@ class ResidualBlock(torch.nn.Module):
             self.make_layer(out_channels, out_channels, num_groups)
         )
         
+        # apply time embeddings as well
+        
+        
         # if in_channels != out_channels, we use a conv layer to map the input to the proper shape
         if in_channels != out_channels:
             self.shortcut = torch.nn.Conv1d(in_channels, out_channels, kernel_size=3, padding="same")
@@ -59,4 +62,10 @@ class SinusoidalTimeEmbedding(torch.nn.Module):
         half_dim = self.n_channels // 8 # half of input channels to self.mlp
         emb = math.log(10_000) / (half_dim - 1)
         emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb) # move to device
+        emb = t[:, None] * emb[None, :] # multiply by t
+        emb = torch.cat((emb.sin(), emb.cos()), dim=1)
         
+        emb = self.mlp(emb)
+        
+        return emb
+
