@@ -75,10 +75,10 @@ class HumanTrajectory():
             
             if frame in self.frames:
                 kept_positions.append(self.position_at_frame(frame))
-                include_positions.append(exist_val)
+                include_positions.extend((exist_val, exist_val))
             else:
                 kept_positions.append(no_exist_pos)
-                include_positions.append(no_exist_val)
+                include_positions.extend((no_exist_val, no_exist_val))
         
         return HumanTrajectory(kept_frames, kept_positions), include_positions
         
@@ -242,7 +242,7 @@ class VSPDataset(Dataset):
         
         # split into input (data) and expected output (labels)
         root_data, root_label = root_trajectory.split(steps)
-        root_include = root_include[:steps]
+        root_include = root_include[:(steps*2)]
         
         agent_data = []
         agent_labels = []
@@ -253,7 +253,7 @@ class VSPDataset(Dataset):
             traj = traj.format_as_change_in_position()
             
             traj_data, traj_label = traj.split(steps)
-            include = include[:steps]
+            include = include[:(steps*2)]
             
             agent_data.append(traj_data)
             agent_labels.append(traj_label)

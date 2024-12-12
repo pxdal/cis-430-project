@@ -5,9 +5,11 @@ import torch
 from noise_predictors import BasicNoisePredictor, UNetNoisePredictor
 
 # define noise schedulers
+# our linear noise scheduler is calmer than the one used in the ddpm paper because trajectories get much noisier in a short amount of time
+# maybe an adjusted method (sine?) would work better as well
 def linear_noise_schedule(timesteps):
-    b_min = 0.0001
-    b_max = 0.02
+    b_min = 0.000001
+    b_max = 0.001
     
     return torch.linspace(b_min, b_max, timesteps)
 
@@ -43,6 +45,8 @@ class DDPM():
         self.alpha = 1 - self.beta
         self.alpha_bar = torch.cumprod(self.alpha, axis=0)
         
+        # print(self.alpha_bar)
+        
         # get variance at each timestep
         # (which is exactly what the noise schedule is, but for clarity it gets its own variable)
         self.sigma2 = self.beta
@@ -59,14 +63,14 @@ class DDPM():
     # var shape: same as t
     def get_q_distribution(self, x0, t):
         # mean is sqrt(alpha_bar) * x0
-        alpha_bars = self.alpha_bar.gather(0, t)
+        alpha_bars = self.alpha_bar.gather(0, t-1)
         
         while len(alpha_bars.shape) < len(x0.shape):
             alpha_bars = alpha_bars.unsqueeze(-1)
         
         mean = alpha_bars ** 0.5 * x0
         
-        var = 1 - self.alpha_bar.gather(0, t)
+        var = 1 - self.alpha_bar.gather(0, t-1)
         
         return mean, var
     
@@ -91,9 +95,9 @@ class DDPM():
         # get the noise prediction
         noise_prediction = self.noise_predictor(xt, t, conditioning)
         
-        beta = self.beta[t]
-        alpha = self.alpha[t]
-        alpha_bar = self.alpha_bar[t]
+        beta = self.beta[t-1]
+        alpha = self.alpha[t-1]
+        alpha_bar = self.alpha_bar[t-1]
         
         # calculate mean of distribution
         noise_coefficient = beta / ((1 - alpha_bar) ** 0.5)
@@ -102,7 +106,7 @@ class DDPM():
         mean = diff_coefficient * ( xt - (noise_coefficient * noise_prediction) )
         
         # get variance
-        var = self.sigma2[t]
+        var = self.sigma2[t-1]
         
         # get added noise from variance
         if eps is None:
@@ -119,18 +123,19 @@ class DDPM():
         shape = self.noise_predictor.get_output_shape()
         
         xt = torch.randn(shape).unsqueeze(0).to(self.device)
+        
         conditioning = conditioning.unsqueeze(0)
         
         # iteratively denoise
-        for t in reversed(range(self.timesteps)):
-            if t == 0:
+        for t in reversed(range(1, self.timesteps+1)):
+            if t == 1:
                 z = torch.zeros(shape)
             else:
                 z = torch.randn(shape)
             
             z = z.to(self.device)
             
-            xt = self.sample_p_distribution(xt, torch.tensor([t]), conditioning)
+            xt = self.sample_p_distribution(xt, torch.tensor([t]).to(self.device), conditioning, eps=z)
         
         return xt[0]
     
@@ -143,7 +148,7 @@ class DDPM():
         # get random timesteps for each item in batch
         batch_size = x0.shape[0]
         
-        t = torch.randint(0, self.timesteps, (batch_size,)).to(self.device)
+        t = torch.randint(1, self.timesteps+1, (batch_size,)).to(self.device)
         
         # forward process (with pre-chosen eps from above)
         xt = self.sample_q_distribution(x0, t, eps=eps)
@@ -167,4 +172,4 @@ class DDPM():
         torch.save(self.noise_predictor.state_dict(), checkpoint_dir)
     
     def load_checkpoint(self, checkpoint_dir):
-        self.noise_predictor.load_state_dict(torch.load(checkpoint_dir, weights_only=False))
+        self.noise_predictor.load_state_dict(torch.load(checkpoint_dir, weights_only=True))
