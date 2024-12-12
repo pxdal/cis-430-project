@@ -2,6 +2,7 @@
 
 import os
 from scipy.interpolate import CubicSpline
+from torch.utils.data import Dataset, DataLoader
 
 class HumanTrajectory():
     def __init__(self, frames, positions):
@@ -63,7 +64,7 @@ class HumanTrajectory():
         kept_positions = []
         include_positions = []
         
-        for frame in range(start_frame, end_frame+1):
+        for frame in range(start_frame, end_frame):
             kept_frames.append(frame)
             
             if frame in self.frames:
@@ -80,13 +81,23 @@ class HumanTrajectory():
     def split(self, split_index):
         return HumanTrajectory(self.frames[:split_index], self.positions[:split_index]), HumanTrajectory(self.frames[split_index:], self.positions[split_index:])
 
+def create_blank_trajectory(length):
+    frames = [-1] * length
+    positions = [(0, 0)] * length
+    
+    return HumanTrajectory(frames, positions)
 
 # utility class for managing VSP datasets, mostly useful methods for training
-# TODO: could use method overrides to make more list-like (support bracket element access and slicing, len() function, etc.)
-class VSPDataset():
+class VSPDataset(Dataset):
     def __init__(self, trajectories):
         self.trajectories = trajectories
     
+    def __getitem__(self, i):
+        return self.get_trajectory(i)
+    
+    def __len__(self):
+        return len(self.trajectories)
+        
     def num_trajectories(self):
         return len(self.trajectories)
     
@@ -156,10 +167,18 @@ class VSPDataset():
         
         return root_trajectory, agent_trajectories
     
+    def is_sample_valid(self, index, in_steps, out_steps, offset):
+        root_trajectory = self.get_trajectory_as_root(index)
+        
+        total_steps = in_steps + out_steps
+        
+        # test if sample is complete given offset
+        return len(root_trajectory)-offset >= total_steps
+    
     # get a training sample for the model given a trajectory index, some number of timesteps, and an offset from the start of the trajectory.
     # training data consists of a trajectory over a fixed number of timesteps (no positions included) as well as the positions of all other agents in the scene at those timesteps.  for timesteps with no data, the position is 0, 0.  to help the model understand when a position is included or not, a binary attribute is attached to each position that's 1 if the position should be considered or 0 if the position isn't provided.  the training output is just the future trajectory positions, given by output_steps.  the binary attribute is not included, because it seems difficult for the model to learn to produce reasonable values (ie a list of ones followed by a list of zeros).  instead, we only train the model on samples where the output is a complete trajectory.
     # to get multiple training samples from a single long trajectory, an offset can be provided to modify where the training data begins from.  the function will raise an exception if the trajectory ends before steps+output_steps (we want to train the model only on complete samples).
-    def get_training_sample(self, index, steps, output_steps, num_agents, offset=0, flatten_output=False):
+    def get_training_sample(self, index, steps, output_steps, num_agents, offset=0):
         root_trajectory, agent_trajectories = self.get_trajectory_and_agents(index)
         
         # filter out agents we don't want
@@ -167,8 +186,13 @@ class VSPDataset():
         
         total_steps = steps + output_steps
         
+        # if there aren't enough agents, fill in the rest with blank trajectories
+        # using negative frames for blank trajectories here is a rudimentary way to ensure that the trajectory isn't included
+        if len(agent_trajectories) < num_agents:
+            agent_trajectories = agent_trajectories + [create_blank_trajectory(total_steps)] * (num_agents - len(agent_trajectories))
+        
         # test if sample is complete given offset
-        if len(root_trajectory)-offset < total_steps:
+        if not self.is_sample_valid(index, steps, output_steps, offset):
             raise Exception("offset " + str(offset) + " too large to return a complete sample (needs " + str(total_steps) + " steps from trajectory of length " + str(len(root_trajectory)) + ")")
         
         # clip trajectories
@@ -197,7 +221,53 @@ class VSPDataset():
         
         # agent labels are included but aren't expected to be used in training
         return (root_data, root_include, agent_data, agent_includes), (root_label, agent_labels)
+
+# creates a thin wrapper around a torch DataLoader that facilitates proper fetching of training samples considering distinct offsets
+# there's probably a more vanilla way to do this, but this works
+class VSPDataLoader(Dataset):
+    def __init__(self, vsp_dataset, in_steps, out_steps, num_agents, batch_size=64):
+        self.in_steps = in_steps
+        self.out_steps = out_steps
+        self.num_agents = num_agents
+        self.vsp_dataset = vsp_dataset
         
+        # get all possible index/offset combinations as list of tuples
+        self.dataset = []
+        
+        for i, trajectory in enumerate( self.vsp_dataset):
+            offset = 0
+            
+            while  self.vsp_dataset.is_sample_valid(i, self.in_steps, self.out_steps, offset):
+                self.dataset.append((i, offset))
+                offset += 1
+        
+        self.dataloader = DataLoader(self, batch_size=batch_size, shuffle=True)
+    
+    def __getitem__(self, i):
+        return self.dataset[i]
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        trajectory_indices, offsets = next(iter(self.dataloader))
+        
+        labels = []
+        conditioning = []
+        
+        for index, offset in zip(trajectory_indices, offsets):
+            (root_data, root_include, agent_data, agent_includes), (root_label, agent_labels) = self.vsp_dataset.get_training_sample(index, self.in_steps, self.out_steps, self.num_agents, offset)
+            
+            labels.append(root_label)
+            conditioning.append((root_data, agent_data, agent_includes))
+        
+        return labels, conditioning
+    
+    def get_next_batch(self):
+        return next(iter(self))
 
 # utility class for loading VSP datasets from a file
 class VSPDatasetLoader():

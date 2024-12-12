@@ -22,6 +22,9 @@ class DDPM():
     
     def __init__(self, timesteps, in_steps, out_steps, num_agents, device, noise_predictor="basic", noise_schedule="linear"):
         self.timesteps = timesteps
+        self.in_steps = in_steps
+        self.out_steps = out_steps
+        self.device = device
         
         # create noise predictor model
         if noise_predictor in self.noise_predictors:
@@ -55,7 +58,7 @@ class DDPM():
     # var shape: same as t
     def get_q_distribution(self, x0, t):
         # mean is sqrt(alpha_bar) * x0
-        mean = self.alpha_bar.gather(0, t).reshape(-1, 1) ** 0.5 * x0
+        mean = self.alpha_bar.gather(0, t).unsqueeze(1) ** 0.5 * x0
         
         var = 1 - self.alpha_bar.gather(0, t)
         
@@ -63,19 +66,21 @@ class DDPM():
     
     # sample from the q(x_t | x_0) distribution for the batch of timesteps each given the batch of x_0
     # this is the "forward process"
-    def sample_q_distribution(self, x0, t):
+    def sample_q_distribution(self, x0, t, eps=None):
         mean, var = self.get_q_distribution(x0, t)
         
-        eps = torch.randn_like(x0).to(self.device)
+        if eps is None:
+            eps = torch.randn_like(x0).to(self.device)
         
         # reparameterization trick
         std = var ** 0.5
         
+        std = std.unsqueeze(1)
+        
         return mean + std*eps
     
-    # sample from the p(x_t-1 | x_t, c) distribution given batch of x_t, batch of timesteps, and batch of conditioning
-    # there should be the same number of timesteps and conditionings as there are samples in the batch of x_t
-    def sample_p_distribution(self, xt, t, conditioning):
+    # sample from the p(x_t-1 | x_t, c) distribution given a single xt, t, and conditioning
+    def sample_p_distribution(self, xt, t, conditioning, eps=None):
         # get the noise prediction
         noise_prediction = self.noise_predictor(xt, t, conditioning)
         
@@ -93,9 +98,36 @@ class DDPM():
         var = self.sigma2[t]
         
         # get added noise from variance
-        noise = torch.randn_like(xt).to(self.device)
+        if eps is None:
+            eps = torch.randn_like(xt).to(self.device)
         
         # reparameterization trick
         std = var ** 0.5
         
-        return mean + std*noise
+        return mean + std*eps
+    
+    # predict a future trajectory from conditioning by sampling from the predicted distribution
+    def full_backward(self, conditioning):    
+        # start from pure noise
+        eps = torch.randn(self.noise_predictor.input_size).unsqueeze(0)
+        
+        
+    
+    # get the model's loss for a batch of training samples with conditioning
+    def loss(self, x0, conditioning, eps=None):
+        # get random noise to be added
+        if eps is None:
+            eps = torch.randn_like(x0)
+        
+        # get random timesteps for each item in batch
+        batch_size = x0.shape[0]
+        
+        t = torch.randint(0, self.timesteps, (batch_size,)).to(self.device)
+        
+        # forward process (with pre-chosen eps from above)
+        xt = self.sample_q_distribution(x0, t, eps=eps)
+        
+        # get noise prediction
+        eps_prediction = self.noise_predictor(xt, t, conditioning)
+        
+        return self.loss_func(eps_prediction, eps)
