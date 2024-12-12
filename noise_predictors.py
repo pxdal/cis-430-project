@@ -51,9 +51,7 @@ class ResidualBlock(torch.nn.Module):
     def forward(self, x, conditioning):
         h = self.conv1(x)
         
-        # add embedding...
-        
-        h = self.conv2(x)
+        h = self.conv2(h)
         
         return h + self.shortcut(x)
     
@@ -66,10 +64,10 @@ class DownConv1d(torch.nn.Module):
         # then we apply a standard convolution to get output channels
         self.down_conv = torch.nn.Sequential(
             torch.nn.MaxPool1d(kernel_size=2),
-            Conv(in_channels, out_channels)
+            ResidualBlock(in_channels, out_channels)
         )
         
-    def forward(self, x):
+    def forward(self, x, conditioning):
         return self.down_conv(x)
 
 # upscales data by 2 and applies convolution, also applies skip connections
@@ -81,9 +79,9 @@ class UpConv1d(torch.nn.Module):
         # then the convolution operation outputs the proper number of channels
         
         self.up_conv = torch.nn.ConvTranspose1d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-        self.conv = Conv(in_channels, out_channels)
+        self.conv = ResidualBlock(in_channels, out_channels)
     
-    def forward(self, x, skip):
+    def forward(self, x, skip, conditioning):
         # get upscaled layers
         x = self.up_conv(x)
         
@@ -115,6 +113,10 @@ class UNetNoisePredictor(torch.nn.Module):
         self.down1 = DownConv1d(32, 64)
         self.down2 = DownConv1d(64, 128)
 
+        # do some processing in the middle
+        self.middle1 = ResidualBlock(128, 128)
+        self.middle2 = ResidualBlock(128, 128)
+        
         # upsamples data + apply skip connections
         self.up1 = UpConv1d(128, 64)
         self.up2 = UpConv1d(64, 32)
@@ -163,90 +165,14 @@ class UNetNoisePredictor(torch.nn.Module):
         
         d1 = self.down1(x)
         d2 = self.down2(d1)
-
-        u1 = self.up1(d2, d1)
+        
+        m1 = self.middle1(d2)
+        m2 = self.middle2(m1)
+        
+        u1 = self.up1(m2, d1)
         u2 = self.up2(u1, x)
         
         return self.out(u2)
-
-# a simplified implementation of a unet, no resnet blocks or fancy timestep embeddings.
-class BasicUNetNoisePredictor(torch.nn.Module):
-    def __init__(self, in_steps, out_steps, num_agents, device):
-        super().__init__()
-        
-        self.input_channels = 1
-        self.output_channels = 1
-        
-        self.in_steps = in_steps
-        self.out_steps = out_steps
-        self.num_agents = num_agents
-        self.device = device
-        
-        # required for diffusion sampling
-        self.output_size = 2*self.out_steps
-        self.input_size = self.output_size
-        
-        # input layer converts input to feature layers
-        self.inp = Conv(self.input_channels, 32)
-        
-        # downsamples data
-        self.down1 = DownConv1d(32, 64)
-        self.down2 = DownConv1d(64, 128)
-
-        # upsamples data + apply skip connections
-        self.up1 = UpConv1d(128, 64)
-        self.up2 = UpConv1d(64, 32)
-        
-        # output layer converts feature layers to output channels
-        self.out = torch.nn.Sequential(
-            torch.nn.Conv1d(32, self.output_channels, kernel_size=3, padding="same")
-        )
-    
-    def get_input_shape(self):
-        return (1, self.input_size)
-    
-    def get_output_shape(self):
-        return (1, self.output_size)
-    
-    def format_input(self, root_label):
-        root_positions = np.array(root_label.positions).flatten()
-        
-        out = torch.tensor(root_positions).float().unsqueeze(0).to(self.device)
-        
-        return out
-    
-    def format_conditioning_single(self, root_trajectory, agent_trajectories, agent_includes):
-        # pack root to single np array
-        root_positions = np.array(root_trajectory.positions)
-        root_packed = root_positions.flatten()
-        
-        agents_packed = []
-        
-        # pack agents to np arrays
-        for agent_trajectory, agent_include in zip(agent_trajectories, agent_includes):
-            positions = np.array(agent_trajectory.positions).flatten()
-            includes = np.array(agent_include)
-            
-            agents_packed.append(np.concatenate((positions, includes)))
-        
-        # concatenate all agents
-        agents_packed = np.concatenate(agents_packed)
-        
-        c = torch.tensor(np.concatenate((root_packed, agents_packed)))
-        
-        return c.float().to(self.device)
-    
-    def forward(self, noisy_input, timestep, conditioning):
-        x = self.inp(noisy_input)
-        
-        d1 = self.down1(x)
-        d2 = self.down2(d1)
-
-        u1 = self.up1(d2, d1)
-        u2 = self.up2(u1, x)
-        
-        return self.out(u2)
-    
 
 # this is a very barebones linear implementation.
 class BasicNoisePredictor(torch.nn.Module):

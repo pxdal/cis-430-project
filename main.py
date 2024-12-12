@@ -66,7 +66,7 @@ def main(argc, argv):
     dataset = VSPDatasetLoader(vsp_dir="data_zara", vsp_name="crowds_zara01.vsp", frame_size=(720, 576)).load()
     
     # model settings
-    timesteps = 1000
+    timesteps = 100
     in_steps = 50
     out_steps = 100
     num_agents = 5
@@ -78,9 +78,9 @@ def main(argc, argv):
     dataloader = VSPDataLoader(dataset, in_steps, out_steps, num_agents, batch_size=64)
     
     # train model
-    # ddpm.load_checkpoint("unet_checkpoint.pth")
+    # ddpm.load_checkpoint("adv_unet_checkpoint.pth")
     train(ddpm, dataloader, num_epochs=500, learning_rate=2e-4)
-    ddpm.save_checkpoint("unet_checkpoint.pth")
+    ddpm.save_checkpoint("adv_unet_checkpoint.pth")
     
     # get a test sample
     # TODO: I gotta jump through a lot of hoops just to get a single sample...

@@ -2,7 +2,7 @@
 
 import numpy as np
 import torch
-from noise_predictors import BasicNoisePredictor, BasicUNetNoisePredictor, UNetNoisePredictor
+from noise_predictors import BasicNoisePredictor, UNetNoisePredictor
 
 # define noise schedulers
 def linear_noise_schedule(timesteps):
@@ -14,7 +14,6 @@ def linear_noise_schedule(timesteps):
 class DDPM():
     noise_predictors = {
         "basic": BasicNoisePredictor,
-        "basic_unet": BasicUNetNoisePredictor,
         "unet": UNetNoisePredictor
     }
     
