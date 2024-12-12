@@ -4,6 +4,12 @@ import os
 from scipy.interpolate import CubicSpline
 from torch.utils.data import Dataset, DataLoader
 
+def add_positions(p1, p2):
+    return (p1[0] + p2[0], p1[1] + p2[1])
+    
+def get_change_in_position(p1, p2):
+    return (p2[0] - p1[0], p2[1] - p1[1])
+    
 class HumanTrajectory():
     def __init__(self, frames, positions):
         self.frames = frames
@@ -80,6 +86,34 @@ class HumanTrajectory():
     # first trajectory returned is everything before the split_index, second is everything after and including the split index
     def split(self, split_index):
         return HumanTrajectory(self.frames[:split_index], self.positions[:split_index]), HumanTrajectory(self.frames[split_index:], self.positions[split_index:])
+    
+    # format self as changes in positions from the previous position (if not already configured as such)
+    def format_as_change_in_position(self):
+        # reformat positions to be a change in position from previous point (excluding initial)
+        new_positions = [self.positions[0]]
+        
+        for i, position in enumerate(self.positions[1:]):
+            prev = self.positions[i]
+            
+            change = get_change_in_position(prev, position)
+            
+            new_positions.append(change)
+        
+        return HumanTrajectory(self.frames, new_positions)
+    
+    # format self as raw positions (if not already configured as such)
+    def format_as_positions(self):
+        # reformat positions to be raw position at each frame
+        new_positions = [self.positions[0]]
+        
+        for i, change in enumerate(self.positions[1:]):
+            prev = new_positions[i]
+            
+            position = add_positions(prev, change)
+            
+            new_positions.append(position)
+        
+        return HumanTrajectory(self.frames, new_positions)
 
 def create_blank_trajectory(length):
     frames = [-1] * length
@@ -203,6 +237,9 @@ class VSPDataset(Dataset):
         root_trajectory, root_include = root_trajectory.clip_by_frame_and_format(start, end)
         agent_trajectories = [traj.clip_by_frame_and_format(start, end) for traj in agent_trajectories]
         
+        # process data as change in position from previous point
+        root_trajectory = root_trajectory.format_as_change_in_position()
+        
         # split into input (data) and expected output (labels)
         root_data, root_label = root_trajectory.split(steps)
         root_include = root_include[:steps]
@@ -212,6 +249,9 @@ class VSPDataset(Dataset):
         agent_includes = []
         
         for traj, include in agent_trajectories:
+            # process data as change in position from previous point
+            traj = traj.format_as_change_in_position()
+            
             traj_data, traj_label = traj.split(steps)
             include = include[:steps]
             

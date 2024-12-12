@@ -2,7 +2,7 @@
 
 import numpy as np
 import torch
-from noise_predictors import BasicNoisePredictor
+from noise_predictors import BasicNoisePredictor, BasicUNetNoisePredictor, UNetNoisePredictor
 
 # define noise schedulers
 def linear_noise_schedule(timesteps):
@@ -13,7 +13,9 @@ def linear_noise_schedule(timesteps):
 
 class DDPM():
     noise_predictors = {
-        "basic": BasicNoisePredictor
+        "basic": BasicNoisePredictor,
+        "basic_unet": BasicUNetNoisePredictor,
+        "unet": UNetNoisePredictor
     }
     
     noise_schedulers = {
@@ -28,7 +30,7 @@ class DDPM():
         
         # create noise predictor model
         if noise_predictor in self.noise_predictors:
-            self.noise_predictor = self.noise_predictors[noise_predictor](in_steps, out_steps, num_agents, device)
+            self.noise_predictor = self.noise_predictors[noise_predictor](in_steps, out_steps, num_agents, device).to(self.device)
         else:
             raise Exception("Nonexistent noise predictor \"" + noise_predictor + "\"")
         
@@ -58,7 +60,12 @@ class DDPM():
     # var shape: same as t
     def get_q_distribution(self, x0, t):
         # mean is sqrt(alpha_bar) * x0
-        mean = self.alpha_bar.gather(0, t).unsqueeze(1) ** 0.5 * x0
+        alpha_bars = self.alpha_bar.gather(0, t)
+        
+        while len(alpha_bars.shape) < len(x0.shape):
+            alpha_bars = alpha_bars.unsqueeze(-1)
+        
+        mean = alpha_bars ** 0.5 * x0
         
         var = 1 - self.alpha_bar.gather(0, t)
         
@@ -75,8 +82,9 @@ class DDPM():
         # reparameterization trick
         std = var ** 0.5
         
-        std = std.unsqueeze(1)
-        
+        while len(std.shape) < len(x0.shape):
+            std = std.unsqueeze(-1)
+            
         return mean + std*eps
     
     # sample from the p(x_t-1 | x_t, c) distribution given a single xt, t, and conditioning
@@ -107,11 +115,25 @@ class DDPM():
         return mean + std*eps
     
     # predict a future trajectory from conditioning by sampling from the predicted distribution
-    def full_backward(self, conditioning):    
+    def backward_single(self, conditioning):    
         # start from pure noise
-        eps = torch.randn(self.noise_predictor.input_size).unsqueeze(0)
+        shape = self.noise_predictor.get_output_shape()
         
+        xt = torch.randn(shape).unsqueeze(0).to(self.device)
+        conditioning = conditioning.unsqueeze(0)
         
+        # iteratively denoise
+        for t in reversed(range(self.timesteps)):
+            if t == 0:
+                z = torch.zeros(shape)
+            else:
+                z = torch.randn(shape)
+            
+            z = z.to(self.device)
+            
+            xt = self.sample_p_distribution(xt, torch.tensor([t]), conditioning)
+        
+        return xt[0]
     
     # get the model's loss for a batch of training samples with conditioning
     def loss(self, x0, conditioning, eps=None):
@@ -130,4 +152,20 @@ class DDPM():
         # get noise prediction
         eps_prediction = self.noise_predictor(xt, t, conditioning)
         
+        # print(eps_prediction)
+        # print(eps)
+        # print()
+        
         return self.loss_func(eps_prediction, eps)
+    
+    def train(self):
+        self.noise_predictor.train()
+    
+    def eval(self):
+        self.noise_predictor.eval()
+    
+    def save_checkpoint(self, checkpoint_dir):
+        torch.save(self.noise_predictor.state_dict(), checkpoint_dir)
+    
+    def load_checkpoint(self, checkpoint_dir):
+        self.noise_predictor.load_state_dict(torch.load(checkpoint_dir, weights_only=False))
