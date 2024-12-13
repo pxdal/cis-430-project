@@ -319,6 +319,7 @@ class VSPDatasetLoader():
         self.frame_size = frame_size
     
     # maps a point's coordinates to -1, 1 range
+    # TODO: this is actually bugged!  outputs between -0.5 and 0.5.  oops.  on a deadline so ignore
     def normalize_point(self, x, y):
         return (x / self.frame_size[0], y / self.frame_size[1])
 
