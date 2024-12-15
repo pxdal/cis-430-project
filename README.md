@@ -6,6 +6,8 @@ Human Trajectory Prediction Using Denoising Diffusion Probabilistic Models.
 
 run `python main.py` to load a test sample, predict a trajectory, and display it (using matplotlib's default interface).  it will also log the ADE and FDE for the provided prediction.
 
+note that the dataset isn't included by default.  You can download the UCY dataset used [here](https://graphics.cs.ucy.ac.cy/research/downloads/crowd-data).  Create a directory "datasets", extract the contents of the zip file, and move the "crowd-data" folder to the datasets directory you just created.  Then the demo should run fine.
+
 ## How to train?
 
 There's no dedicated training script at the moment, but these three lines in `main.py`:
@@ -26,4 +28,4 @@ Only a VSP loader configured for the UCY dataset is implemented at the moment.  
 data_frame_size = (720, 576)
 dataset = VSPDatasetLoader(vsp_dir="data_zara", vsp_name="crowds_zara01.vsp", frame_size=data_frame_size).load()
 ```
-control dataset loading.  `vsp_dir` and `vsp_name` can be modified to load a different VSP (it currently looks in `./datasets/crowd-data/crowds/data`, but I'll probably change this to be more general).  You can download the UCY dataset used at [here](https://graphics.cs.ucy.ac.cy/research/downloads/crowd-data).  `data_frame_size` controls the size of each frame (used to map positions to [-1, 1] range)/
+control dataset loading.  `vsp_dir` and `vsp_name` can be modified to load a different VSP (it currently looks in `./datasets/crowd-data/crowds/data`, but I'll probably change this to be more general).`data_frame_size` controls the size of each frame (used to map positions to [-1, 1] range).
